@@ -7,6 +7,7 @@ use crate::regram::RegRam;
 use std::collections::VecDeque;
 use emu_core::ClockDomain;
 
+pub mod axp2101;
 pub mod m5;
 
 pub trait I2cDevice {

@@ -86,7 +86,10 @@ Say the new board has a BME280-style I2C sensor, a status LED on GPIO 5, and a b
    }
    ```
    Inputs are not board methods: a button is `press btn1 150` in a script (`docs/cli.md`) or a
-   click in the page, both of which end up in `gpio_set_input` on the SoC.
+   click in the page, both of which end up in `gpio_set_input` on the SoC. The exception is a key
+   that does not reach a GPIO directly, such as a PMIC's power key: the board names it in
+   `has_key`, takes it in `key_at` and returns what it drives from `take_edges`
+   (`WaveshareEpaper397`'s `pwr`).
 
 3. **Register it**: one arm in `make_board` (`"sensorboard" => Some(Box::new(Sensorboard::new()))`).
    The CLI's `--board sensorboard` and the page's board list (`web/emu.js`) take the name.

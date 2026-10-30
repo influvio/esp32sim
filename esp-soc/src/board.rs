@@ -142,6 +142,12 @@ pub trait BoardModel {
     fn camera_frame_start(&mut self, _claim: bool) -> Option<VirtualCycle> { None }
     /// Physical route changes invalidate the fresh-frame opportunity.
     fn invalidate_camera_frame_start(&mut self) {}
+    /// Whether the board has a key by this name that is not a plain GPIO button (a PMIC's power
+    /// key); scripts and the UI press it with `key_at` instead of `named_pin`.
+    fn has_key(&self, _name: &str) -> bool { false }
+    /// Press (`down`) or release such a key at the bus cycle. What it drives reaches the GPIOs
+    /// through `take_edges`. Returns false if the board has no key by that name.
+    fn key_at(&mut self, _cycle: VirtualCycle, _name: &str, _down: bool) -> bool { false }
 }
 
 pub type Board = Box<dyn BoardModel>;

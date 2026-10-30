@@ -151,14 +151,37 @@ flash and 8 MB PSRAM for it, as the ESP32-S3-WROOM-1-N16R8 module has.
 | Device | Bus | Model |
 | --- | --- | --- |
 | SSD1677 + GDEM0397T81 800×480 black/white e-paper | BUSY 3, D/C 9, CS 10, SCLK 11, MOSI 12, RST 46; SPI2 through the GPIO matrix or bit-banged GPIO | `esp_soc::devices::Ssd1677` (below). Bytes reach it while CS is low (GPIO or a hardware CS on GPIO 10) and RST is high, and only if routed to GPIO 11/12 |
-| BOOT and rotary key | GPIO 0; 4 / 5 (press) / 6, active low | released-high inputs; script names `boot`, `up`/`left`, `press`/`function`/`sw`, `down`/`right` |
-| AXP2101 (Waveshare: TG28) at 0x34, PCF85063 at 0x51 | I2C0 (SDA 41, SCL 42) | initialization-compatible register stubs |
+| Three-way rocker U4 and BOOT | GPIO 4 (UP) / 5 (pushed in) / 6 (DOWN); BOOT GPIO 0; active low | released-high inputs; script names `up`/`left`, `press`/`function`/`sw`, `down`/`right`, `boot` |
+| PWR key | the AXP2101's PWRON; `PWR_OUT` GPIO 1, high while held | script name `pwr` (`press pwr 2000`); not a GPIO button, see below |
+| AXP2101 (Waveshare: TG28) at 0x34 | I2C0 (SDA 41, SCL 42); IRQ GPIO 38, active low | `esp_periph::i2c::axp2101`: the PWRON key's interrupts, other registers storage |
+| PCF85063 at 0x51 | I2C0 | initialization-compatible register stub |
 | SHTC3, QMI8658, ES8311 + NS4150B, TF card | | not modelled |
 
 Pins: Waveshare's E-Paper tutorial (section 5.2) and `DEV_Config.h` of the board's
-`02_E-Paper_Example`. The key GPIOs come from the CrossMux firmware's hardware notes for this
-board (`docs/engineering/waveshare-epaper-397.md` in 0x1abin/crossmux). The schematic names the
-nets `Button_Up`, `Button_Function` and `Button_Down`, but its text does not give their GPIOs.
+`02_E-Paper_Example`. The keys come from the schematic (`ESP32-S3_e-Paper-3.97-schematic.pdf`,
+sheets "KEY & LED" and "Power"): its net list joins `Button_Up`, `Button_Function` and
+`Button_Down` to GP4, GP5 and GP6 (10 kΩ pull-ups each), `PWR_IRQ` to GP38 and `PWR_OUT` to GP1.
+Waveshare's `button_bsp.c` and the CrossMux firmware's hardware notes for this board
+(`docs/engineering/waveshare-epaper-397.md` in 0x1abin/crossmux) use the same GPIOs. PWR (Key1)
+pulls PWRON low; the same node holds T1 (BSS138) on while it is released, so `PWR_OUT`, pulled up
+by R24 to 3V3, is low then and high while PWR is held. Waveshare's ESP-IDF demo
+`08_ESP32-S3_e-Paper-3.97` reads GPIO 1 as `PWR_OUT` at boot (`pcf85063_bsp.h`, `main.cc`).
+
+### The PWR key and the AXP2101
+
+Source: the TG28 datasheet V1.0 (X-Powers, 2024-05-11), sections 6.5.4 and 6.12.1. Pressing PWR
+(the page's PWR button, or `press pwr MS` in a script) raises GPIO 1 and drives the PMIC's key
+events into REG 49H, each only if its REG 41H enable bit is set: the negative edge at the press,
+the long press once the key has been held for IRQLEVEL (REG 27H, default 1.5 s), the short press at
+an earlier release, the positive edge at every release. The datasheet names these events but not
+their timing; the timing above is the AXP2101 convention. GPIO 38 is low while any REG 48H..4AH
+bit is set; writing ones clears them (RW1C). By default only the short and long press are enabled.
+
+A key held for OFFLEVEL (REG 27H, default 6 s; Waveshare sets 4 s) and writes of REG 10H bit 0
+(soft power-off) or bit 1 (restart) are recorded in the `[emu] axp2101` report line and in REG 21H.
+The power-off itself is not modelled: the SoC keeps running. REG 22H bit 1 (power off after
+OFFLEVEL) and the ONLEVEL field are eFuse values; the model takes them as enabled and 128 ms.
+Power-on by the key, the regulators, the charger, the ADC and the fuel gauge are not modelled.
 
 ### The SSD1677 model
 

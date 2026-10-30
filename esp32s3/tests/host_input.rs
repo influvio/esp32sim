@@ -95,3 +95,24 @@ fn camera_plain_input_channel_needs_no_web_server() {
     assert!(machine.camera_input.as_ref().unwrap().lock().unwrap().is_none());
     assert!(machine.web.is_none());
 }
+
+/// The ePaper-3.97's PWR is a board key, not a GPIO button: the page's `{"t":"btn","key":"pwr"}`
+/// and a script's `press pwr` both reach `key_at`, which raises PWR_OUT (GPIO 1).
+#[test]
+fn board_keys_from_the_page_and_scripts() {
+    let mut machine = esp32s3::machine([1, 2, 3, 4, 5, 6]);
+    machine.bus.board = Box::new(esp32s3::board::WaveshareEpaper397::new());
+    machine.bus.attach_board_devices();
+    let web = WebServer::queued();
+    machine.web = Some(web.clone());
+    web.push_incoming(r#"{"t":"btn","key":"pwr","v":1}"#.to_string());
+    assert!(matches!(machine.run(0), Stop::MaxInsns));
+    assert!(machine.bus.board.report().contains("axp2101: 1 PWR presses"));
+    web.push_incoming(r#"{"t":"btn","key":"nope","v":1}"#.to_string());
+    assert!(matches!(machine.run(0), Stop::MaxInsns));
+    machine.load_script("0.5 press pwr 200\n1 press boot\n").unwrap();
+    assert!(matches!(machine.script.events[0].1, ScriptAction::Key(ref k, true) if k == "pwr"));
+    assert!(matches!(machine.script.events[1].1, ScriptAction::Key(ref k, false) if k == "pwr"));
+    assert!(matches!(machine.script.events[2].1, ScriptAction::Gpio(0, false)));
+    assert!(machine.load_script("0.5 press nope\n").is_err());
+}

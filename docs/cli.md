@@ -130,6 +130,7 @@ One action per line, `<seconds> <cmd> [args]`; buttons/encoder are active low.
 
 ```
 1.5  press btn1 150        # press for 150 ms (btn1, btn2, knob/sw, or a GPIO number)
+1.8  press pwr 2000        # a board key that is not a GPIO button (the ePaper-3.97's PWR, docs/boards.md)
 2.0  release 16
 2.5  gpio 17 0
 3.0  knob cw 3             # 3 detents clockwise (ccw for the other way)

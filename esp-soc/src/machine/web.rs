@@ -131,6 +131,9 @@ impl<S: Soc> Machine<S> {
             let field = |key| message.get(key).and_then(Json::scalar_text);
             let t = field("t").unwrap_or_default();
             match t.as_str() {
+                // `key`: a board key that is not a GPIO button (a PMIC's power key)
+                "btn" if message.get("key").is_some() => { let v = field("v").unwrap_or_default() == "1"; let at = self.bus.cycles();
+                           self.bus.board().key_at(at, &field("key").unwrap_or_default(), v); }
                 "btn" => { let pin: u8 = field("pin").and_then(|x| x.parse().ok()).unwrap_or(0); let v = field("v").unwrap_or_default() == "1";
                            self.bus.gpio_set_input(pin, !v); *self.bus.irq_dirty() = true; }
                 "knobpress" => { let v = field("v").unwrap_or_default() == "1"; if let Some(sw) = self.bus.board_ref().named_pin("sw") { self.bus.gpio_set_input(sw, !v); *self.bus.irq_dirty() = true; } }

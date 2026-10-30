@@ -5,11 +5,19 @@
 //! `02_E-Paper_Example`): BUSY GPIO 3 (high while busy), D/C 9, CS 10, SCLK 11, MOSI 12, RST 46;
 //! no MISO, no display power switch. Waveshare's example bit-bangs SPI on these GPIOs; GxEPD2
 //! (`GxEPD2_397_GDEM0397T81`) routes SPI2 to them through the GPIO matrix and drives CS itself.
-//! Both reach the controller. Buttons, active low: BOOT GPIO 0, and the rotary key's three
-//! directions GPIO 4 / 5 (press) / 6, as the CrossMux firmware's hardware notes for this board
-//! (`docs/engineering/waveshare-epaper-397.md`) name them. The I2C bus (SDA 41, SCL 42) carries
-//! register stubs for the AXP2101 PMIC (Waveshare calls it TG28) and the PCF85063 RTC; the
-//! SHTC3, QMI8658, ES8311 codec and the TF card are not modelled.
+//! Both reach the controller.
+//!
+//! Keys (schematic `ESP32-S3_e-Paper-3.97-schematic.pdf`, sheets "KEY & LED" and "Power"): the
+//! three-way rocker U4 pulls `Button_Up` GPIO 4, `Button_Function` GPIO 5 (pushed in) and
+//! `Button_Down` GPIO 6 low, BOOT (Key2) pulls GPIO 0 low; all have 10 kΩ pull-ups. PWR (Key1)
+//! pulls the AXP2101's PWRON low and, through T1 (BSS138, R24 10 kΩ to 3V3), lets `PWR_OUT` GPIO 1
+//! rise: GPIO 1 is high while PWR is held. The AXP2101's open-drain IRQ is `PWR_IRQ` GPIO 38. The
+//! I2C bus (SDA 41, SCL 42) carries the AXP2101 (Waveshare calls it TG28: its PWRON key and
+//! interrupt registers, `esp_periph::i2c::axp2101`) and a PCF85063 RTC stub; the SHTC3, QMI8658,
+//! ES8311 codec and the TF card are not modelled.
+use std::sync::{Arc, Mutex};
+
+use esp_periph::i2c::axp2101::{Axp2101, Axp2101State};
 use esp_soc::board::{BoardEdge, BoardModel, SpiPins, VirtualCycle};
 use esp_soc::devices::{Ssd1677, SpiBitBang};
 use esp_soc::devices::ssd1677::Refresh;
@@ -24,6 +32,10 @@ pub const PIN_BOOT: u8 = 0;
 pub const PIN_KEY_UP: u8 = 4;
 pub const PIN_KEY_PRESS: u8 = 5;
 pub const PIN_KEY_DOWN: u8 = 6;
+/// `PWR_OUT`: high while the PWR key is held
+pub const PIN_PWR_OUT: u8 = 1;
+/// `PWR_IRQ`: the AXP2101's interrupt, low while an enabled event is pending
+pub const PIN_PMIC_IRQ: u8 = 38;
 pub const EPD_WIDTH: usize = 800;
 pub const EPD_HEIGHT: usize = 480;
 
@@ -38,6 +50,10 @@ pub struct WaveshareEpaper397 {
     pub spi_bytes: u64, pub spi_dropped: u64,
     /// bytes assembled from bit-banged GPIO 11/12
     pub bitbang_bytes: u64,
+    /// the AXP2101, shared with its I2C device
+    pub pmic: Arc<Mutex<Axp2101State>>,
+    /// board time, and the (PWR_OUT, PWR_IRQ) levels last delivered as edges
+    now: VirtualCycle, pmic_pins: (bool, bool),
 }
 
 impl Default for WaveshareEpaper397 { fn default() -> Self { Self::new() } }
@@ -46,7 +62,16 @@ impl WaveshareEpaper397 {
     pub fn new() -> Self {
         WaveshareEpaper397 { epd: Ssd1677::new(EPD_WIDTH, EPD_HEIGHT, PIN_EPD_BUSY, crate::periph::CPU_HZ / 1_000_000),
             spi: SpiBitBang::new(PIN_EPD_SCLK, PIN_EPD_MOSI, PIN_EPD_CS), cs_high: true, rst_low: false,
-            gpio_events: 0, spi_bytes: 0, spi_dropped: 0, bitbang_bytes: 0 }
+            gpio_events: 0, spi_bytes: 0, spi_dropped: 0, bitbang_bytes: 0,
+            pmic: Arc::new(Mutex::new(Axp2101State::new(crate::periph::CPU_HZ))), now: 0, pmic_pins: (false, true) }
+    }
+    fn pmic(&self) -> std::sync::MutexGuard<'_, Axp2101State> { self.pmic.lock().expect("AXP2101 state mutex poisoned") }
+    /// (PWR_OUT, PWR_IRQ) as the key and the PMIC drive them now.
+    fn pmic_levels(&self) -> (bool, bool) { let p = self.pmic(); (p.key_down(), !p.irq_low()) }
+    fn advance(&mut self, cycle: VirtualCycle) {
+        self.now = self.now.max(cycle);
+        self.epd.advance_to(cycle);
+        self.pmic().advance_to(cycle);
     }
     fn pins(&mut self, changes: &[(u8, bool)]) {
         for &(pin, level) in changes {
@@ -74,7 +99,7 @@ impl BoardModel for WaveshareEpaper397 {
     fn name(&self) -> &'static str { "waveshare-epaper397" }
     fn gpio_changes(&mut self, changes: &[(u8, bool)]) { self.pins(changes); }
     fn gpio_output_at(&mut self, cycle: VirtualCycle, changes: &[(u8, bool)], _enabled: u64, _output: u64) {
-        self.epd.advance_to(cycle);
+        self.advance(cycle);
         self.pins(changes);
     }
     fn gpio_events(&self) -> u64 { self.gpio_events }
@@ -92,7 +117,7 @@ impl BoardModel for WaveshareEpaper397 {
     fn i2c_devices(&mut self) -> Vec<(u8, u8, Box<dyn crate::i2c::I2cDevice>)> {
         use crate::i2c::*;
         vec![
-            (0, 0x34, Box::new(Reg8Device::new("axp2101-pmic-initialization-stub", &[(0x03, 0x4a)]))),
+            (0, Axp2101::ADDRESS, Box::new(Axp2101::new(self.pmic.clone()))),
             (0, 0x51, Box::new(Reg8Device::new("pcf85063a-rtc-initialization-stub", &[]))),
         ]
     }
@@ -101,11 +126,28 @@ impl BoardModel for WaveshareEpaper397 {
     fn display_frames(&self) -> u64 { self.epd.version() }
     fn gram(&self) -> Option<(Vec<u16>, usize, usize)> { Some((self.epd.bw_ram_rgb565(), esp_soc::devices::ssd1677::RAM_COLS, esp_soc::devices::ssd1677::RAM_ROWS)) }
     fn input_levels(&self) -> Vec<(u8, bool)> {
-        vec![self.epd.busy_input(), (PIN_BOOT, true), (PIN_KEY_UP, true), (PIN_KEY_PRESS, true), (PIN_KEY_DOWN, true)]
+        let (pwr, irq) = self.pmic_levels();
+        vec![self.epd.busy_input(), (PIN_BOOT, true), (PIN_KEY_UP, true), (PIN_KEY_PRESS, true), (PIN_KEY_DOWN, true), (PIN_PWR_OUT, pwr), (PIN_PMIC_IRQ, irq)]
     }
-    fn next_deadline(&self) -> Option<VirtualCycle> { self.epd.next_deadline() }
-    fn advance_to(&mut self, cycle: VirtualCycle) { self.epd.advance_to(cycle); }
-    fn take_edges(&mut self) -> Vec<BoardEdge> { self.epd.take_edges() }
+    fn next_deadline(&self) -> Option<VirtualCycle> {
+        match (self.epd.next_deadline(), self.pmic().next_deadline()) { (Some(a), Some(b)) => Some(a.min(b)), (a, b) => a.or(b) }
+    }
+    fn advance_to(&mut self, cycle: VirtualCycle) { self.advance(cycle); }
+    fn take_edges(&mut self) -> Vec<BoardEdge> {
+        let mut edges = self.epd.take_edges();
+        let (pwr, irq) = self.pmic_levels();
+        if pwr != self.pmic_pins.0 { edges.push(BoardEdge { cycle: self.now, pin: PIN_PWR_OUT, level: pwr }); }
+        if irq != self.pmic_pins.1 { edges.push(BoardEdge { cycle: self.now, pin: PIN_PMIC_IRQ, level: irq }); }
+        self.pmic_pins = (pwr, irq);
+        edges
+    }
+    fn has_key(&self, name: &str) -> bool { matches!(name, "pwr" | "power") }
+    fn key_at(&mut self, cycle: VirtualCycle, name: &str, down: bool) -> bool {
+        if !self.has_key(name) { return false; }
+        self.advance(cycle);
+        self.pmic().key(cycle, down);
+        true
+    }
     fn named_pin(&self, name: &str) -> Option<u8> {
         match name {
             "boot" | "back" | "btn1" => Some(PIN_BOOT),
@@ -117,13 +159,16 @@ impl BoardModel for WaveshareEpaper397 {
     }
     fn report(&self) -> String {
         let e = &self.epd;
+        let p = self.pmic();
         let r = |k: Refresh| e.refreshes[k as usize];
         format!("[emu] epaper: {} refreshes (full {}, fast {}, 4-grey {}, partial {}), {} black pixels, last window {:?} with driver output {:02x?}, busy={} asleep={}; \
                  driver output now {:02x?} entry={:#04x} temp={:#04x} custom LUT={}; resets hw {} sw {}; {} RAM bytes; spi {} bytes, {} bit-banged, {} dropped; \
-                 {} bytes while busy, {} in deep sleep, {} unknown commands; gpio events {}",
+                 {} bytes while busy, {} in deep sleep, {} unknown commands; gpio events {}\n\
+                 [emu] axp2101: {} PWR presses, IRQ status 48h..4Ah {:02x?}, power-off requests: {}",
                 e.version(), r(Refresh::Full), r(Refresh::Fast), r(Refresh::Gray4), r(Refresh::Partial), e.black_pixels(), e.last_window, e.last_driver, e.busy(), e.sleeping,
                 e.driver, e.entry, e.temp, e.custom_lut, e.hw_resets, e.sw_resets, e.bytes_written, self.spi_bytes, self.bitbang_bytes, self.spi_dropped,
-                e.bytes_while_busy, e.bytes_asleep, e.unknown_commands, self.gpio_events)
+                e.bytes_while_busy, e.bytes_asleep, e.unknown_commands, self.gpio_events,
+                p.key_presses, &p.regs[0x48..=0x4a], p.power_off.map_or("none".to_string(), |why| format!("{why} (not modelled: the SoC kept running)")))
     }
 }
 
@@ -208,11 +253,56 @@ mod tests {
     #[test]
     fn buttons_and_devices() {
         let mut b = WaveshareEpaper397::new();
-        assert_eq!(b.input_levels(), vec![(3, false), (0, true), (4, true), (5, true), (6, true)]);
+        assert_eq!(b.input_levels(), vec![(3, false), (0, true), (4, true), (5, true), (6, true), (1, false), (38, true)]);
         assert_eq!((b.named_pin("boot"), b.named_pin("up"), b.named_pin("press"), b.named_pin("down"), b.named_pin("x")), (Some(0), Some(4), Some(5), Some(6), None));
+        assert!(b.has_key("pwr") && !b.has_key("boot") && !b.key_at(0, "boot", true));
         assert_eq!(b.i2c_devices().iter().map(|d| d.1).collect::<Vec<_>>(), [0x34, 0x51]);
         assert!(b.report().starts_with("[emu] epaper: 0 refreshes"));
         assert_eq!(crate::board::make_board("epaper397").unwrap().name(), "waveshare-epaper397");
+    }
+
+    /// PWR raises GPIO 1 while held; the AXP2101's default enables (short and long press) pull
+    /// GPIO 38 low at the long press, and clearing REG 49H releases it.
+    #[test]
+    fn pwr_key_drives_gpio1_and_the_pmic_irq() {
+        let ms = crate::periph::CPU_HZ / 1000;
+        let mut b = WaveshareEpaper397::new();
+        assert!(b.key_at(10, "pwr", true));
+        let pins = |b: &mut WaveshareEpaper397| b.take_edges().iter().map(|e| (e.cycle, e.pin, e.level)).collect::<Vec<_>>();
+        assert_eq!(pins(&mut b), [(10, PIN_PWR_OUT, true)], "the negative edge interrupt is off by default");
+        assert_eq!(b.next_deadline(), Some(10 + 1500 * ms), "IRQLEVEL defaults to 1.5 s");
+        b.advance_to(10 + 1500 * ms);
+        assert_eq!(pins(&mut b), [(10 + 1500 * ms, PIN_PMIC_IRQ, false)]);
+        b.key_at(2000 * ms, "pwr", false);
+        assert_eq!(pins(&mut b), [(2000 * ms, PIN_PWR_OUT, false)]);
+        let mut pmic = Axp2101::new(b.pmic.clone());
+        use crate::i2c::I2cDevice;
+        pmic.start(false); pmic.write(0x49); pmic.start(true);
+        assert_eq!(pmic.read(), esp_periph::i2c::axp2101::PKEY_LONG);
+        pmic.start(false); pmic.write(0x49); pmic.write(0xff);
+        assert_eq!(pins(&mut b), [(2000 * ms, PIN_PMIC_IRQ, true)]);
+        assert!(b.report().contains("[emu] axp2101: 1 PWR presses"));
+    }
+
+    /// The PWR key read back through the S3 bus. IDF v5.5.4 `soc/esp32s3/register/soc/gpio_reg.h`:
+    /// IN 0x3c (GPIO 0-31), IN1 0x40 (GPIO 32-53).
+    #[test]
+    fn pwr_key_reaches_gpio_in_through_the_bus() {
+        const GPIO: u32 = 0x6000_4000;
+        let mut bus = crate::bus::SocBus::new(1024, 1024, [0; 6]);
+        bus.board = Box::new(WaveshareEpaper397::new());
+        bus.attach_board_devices();
+        let pwr_out = |bus: &mut crate::bus::SocBus| bus.read32(GPIO + 0x3c).unwrap() & (1 << PIN_PWR_OUT) != 0;
+        let irq_high = |bus: &mut crate::bus::SocBus| bus.read32(GPIO + 0x40).unwrap() & (1 << (PIN_PMIC_IRQ - 32)) != 0;
+        assert!(!pwr_out(&mut bus) && irq_high(&mut bus));
+        let at = bus.cycles;
+        assert!(bus.board.key_at(at, "pwr", true));
+        assert!(pwr_out(&mut bus) && irq_high(&mut bus));
+        Bus::tick(&mut bus, (1500 * US * 1000) as u32);
+        assert!(!irq_high(&mut bus), "the long press pulls PWR_IRQ low");
+        let at = bus.cycles;
+        bus.board.key_at(at, "pwr", false);
+        assert!(!pwr_out(&mut bus));
     }
 
     /// The whole path through the S3 bus: Waveshare's bit-banged GPIO writes, BUSY read back from

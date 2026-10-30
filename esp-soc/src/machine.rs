@@ -15,6 +15,8 @@ mod web;
 
 #[derive(Clone, Debug)]
 pub enum ScriptAction { Gpio(u8, bool), Serial(String), Uart(usize, String), Stop, Touch(u16, u16, bool), Poke(u32, u32), TouchPad(u8, bool), Ble(String), Analog(u8, esp_periph::AnalogSource),
+    /// A board key that is not a GPIO button (`BoardModel::key_at`): name, pressed.
+    Key(String, bool),
     /// `waituart0 <timeout_s> <text>`: hold the rest of the script until UART0 prints `text` (or the
     /// timeout passes), then shift every later action by the time actually waited. Fields: text,
     /// timeout in cycles, the cycle the script placed it at.
@@ -1046,6 +1048,7 @@ impl<S: Soc> Machine<S> {
             if self.script.log { eprintln!("[script] t={:.3}s {:?}", t as f64 / S::CPU_HZ as f64, a); }
             match a {
                 ScriptAction::Gpio(pin, level) => { self.bus.gpio_set_input(pin, level); *self.bus.irq_dirty() = true; }
+                ScriptAction::Key(name, down) => { let at = self.bus.cycles(); self.bus.board().key_at(at, &name, down); }
                 ScriptAction::Serial(text) => self.bus.serial_input(text.as_bytes()),
                 ScriptAction::Uart(n, text) => self.bus.uart_input(n, text.as_bytes()),
                 ScriptAction::Stop => { self.max_cycles = 0; stopped = true; }
@@ -1124,6 +1127,7 @@ impl<S: Soc> Machine<S> {
     /// Parse a script: one action per line, `<seconds> <cmd> [args]`.
     ///   press <pin> [ms]   release <pin>   gpio <pin> <0|1>   serial <text...>   knob <cw|ccw> [detents]   touch <x> <y> <0|1>   poke <addr> <value>   stop
     /// Pins are numbers or the board's names (`btn1`, `sw`, ...); buttons/encoder are active-low with pull-ups (release = 1).
+    /// `press`/`release` also take a board key that is not a GPIO (`pwr` on the ePaper-3.97).
     pub fn load_script(&mut self, text: &str) -> Result<(), String> {
         let hz = S::CPU_HZ as f64;
         let mut ev: Vec<(u64, ScriptAction)> = Vec::new();
@@ -1137,7 +1141,15 @@ impl<S: Soc> Machine<S> {
             let board = self.bus.board_ref();
             let pin = |s: &str| -> Result<u8, String> { board.named_pin(s).map(Ok).unwrap_or_else(|| s.parse().map_err(|_| format!("line {}: bad pin {}", ln + 1, s))) };
             let c = (t * hz) as u64;
+            let key = rest.split_whitespace().next().filter(|&n| board.named_pin(n).is_none() && board.has_key(n)).map(str::to_string);
             match cmd {
+                "press" | "release" if key.is_some() => {
+                    let name = key.unwrap_or_default();
+                    if cmd == "press" {
+                        let ms: f64 = rest.split_whitespace().nth(1).map(|x| x.parse().unwrap_or(100.0)).unwrap_or(100.0);
+                        ev.push((c, ScriptAction::Key(name.clone(), true))); ev.push((c + (ms / 1000.0 * hz) as u64, ScriptAction::Key(name, false)));
+                    } else { ev.push((c, ScriptAction::Key(name, false))); }
+                }
                 "press" => { let mut p = rest.split_whitespace(); let pn = pin(p.next().unwrap_or(""))?; let ms: f64 = p.next().map(|x| x.parse().unwrap_or(100.0)).unwrap_or(100.0);
                              ev.push((c, ScriptAction::Gpio(pn, false))); ev.push((c + (ms / 1000.0 * hz) as u64, ScriptAction::Gpio(pn, true))); }
                 "release" => ev.push((c, ScriptAction::Gpio(pin(rest)?, true))),
