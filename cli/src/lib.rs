@@ -29,6 +29,7 @@ fn help(chip: &str, code: i32) -> ! {
     eprintln!("  --console usb|uart0|both|none   which consoles to print (uart0 shows the ROM and bootloader)");
     eprintln!("  --wifi ssid=…,psk=…   a virtual access point with DHCP, DNS, NTP and NAT to the host network");
     eprintln!("  --script F            host actions at emulated times (button presses, touches, serial input, stop)");
+    eprintln!("  --mic tone:HZ[:AMP] | --mic F.wav [--mic-loop]   the board microphone's input (S3 waveshare-epaper397)");
     eprintln!("  --tft-png F, --wav F  save the display / the audio at the end of the run");
     eprintln!("  --web PORT            serve the board UI at http://127.0.0.1:PORT/ in real time");
     eprintln!("  --elf F               symbols for logs, traces and profiles (repeatable)");
@@ -116,7 +117,7 @@ pub struct Opts {
     pub spi2_timing: bool, pub measured_te: bool,
     pub max_insns: u64, pub max_seconds: Option<f64>, pub script: Option<String>, pub serial: Option<String>,
     pub console: Option<String>, pub console_prefix: bool, pub realtime: bool, pub web_port: Option<u16>, pub web_dir: Option<String>, pub no_reboot: bool,
-    pub i2s_tone: Vec<String>,
+    pub i2s_tone: Vec<String>, pub mic: Option<String>, pub mic_loop: bool,
     pub wav: Option<String>, pub tft_png: Option<String>, pub gram_png: Option<String>, pub dump: bool,
     pub trace: bool, pub trace_from: u64, pub breaks: Vec<u32>, pub watch: Option<u32>, pub peeks: Vec<(u32, usize)>, pub pwm_pins: Vec<u8>, pub adc_pins: Vec<u8>, pub adc_raw: Vec<(u8, u16)>, pub disasms: Vec<(u32, usize)>,
     pub profile: bool, pub profile_blocks: bool, pub coverage: Option<Option<String>>, pub irq_latency: bool, pub vcd: Option<String>,
@@ -190,6 +191,8 @@ pub fn parse(args: &[String], default_chip: &str) -> Opts {
             "--web-dir" => o.web_dir = Some(next()),
             "--no-reboot" => o.no_reboot = true,
             "--i2s-tone" => o.i2s_tone.push(next()),
+            "--mic" => o.mic = Some(next()),
+            "--mic-loop" => o.mic_loop = true,
             "--wav" => o.wav = Some(next()),
             "--tft-png" => o.tft_png = Some(next()),
             "--gram-png" => o.gram_png = Some(next()),
@@ -844,6 +847,12 @@ fn prepare<S: Soc>(m: &mut Machine<S>, o: &Opts) -> String {
         });
         if let Err(e) = result { eprintln!("--i2s-tone: {e}"); std::process::exit(2); }
     }
+    if let Some(spec) = &o.mic {
+        let tone: Vec<&str> = spec.split(':').collect();
+        let words: Vec<&str> = if tone[0] == "tone" { tone } else if o.mic_loop { vec!["file", spec, "loop"] } else { vec!["file", spec] };
+        let result = esp_soc::mic::Mic::from_words(&words).and_then(|mic| m.set_mic(mic));
+        if let Err(e) = result { usage_error(&format!("--mic: {e}")); }
+    }
 
     if let Some(sec) = o.max_seconds { m.max_cycles = (sec * S::CPU_HZ as f64) as u64; }
     boot
@@ -877,6 +886,7 @@ fn report<S: Soc>(m: &mut Machine<S>, o: &Opts, stop: Stop, dt: f64) {
     eprintln!("{}", m.irq_report());
     if let Some(w) = &o.wav { match m.write_wav(w) { Ok(n) => eprintln!("[emu] wrote {} samples ({:.2} s) to {}", n, n as f64 / m.bus.audio().1 as f64, w), Err(e) => eprintln!("[emu] wav: {}", e) } }
     { let r = m.bus.report(); if !r.is_empty() { eprintln!("{}", r); } }
+    if let Some(mic) = &m.mic { eprintln!("{}", mic.report()); }
     { let st: Vec<(u64, u64, u64, usize)> = m.cores.iter().filter_map(|c| c.code_cache_stats()).collect();
       if m.vq_stats[0] > 0 { eprintln!("[emu] virtual quanta: runs, quanta, stopped at a device register, at waiti = {:?}", m.vq_stats); }
       if st.iter().any(|s| s.0 > 0) { let b0 = st[0]; let b1 = st.get(1).copied().unwrap_or((0, 0, 0, 0)); eprintln!("[emu] blocks: {} built ({} cache flushes) core0, {} ({}) core1; jit: {} compiled, {} KB code", b0.0, b0.1, b1.0, b1.1, b0.2 + b1.2, (b0.3 + b1.3) / 1024); } }

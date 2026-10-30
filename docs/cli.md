@@ -54,6 +54,7 @@ default too, with 16 MB of flash ([esp32p4.md](esp32p4.md)).
 | `--help`, `-h` | print the usage line and exit |
 | `--max-seconds S` | stop after this much emulated time, including all reboots; also applies to `--cooja` |
 | `--max-insns N` | cap scheduler work across all reboots (details below); unavailable with `--cooja`, which uses `--max-seconds` |
+| `--mic tone:HZ[:AMP]`, `--mic F.wav`, `--mic-loop` | the board microphone's input: a sine (amplitude 0..1, default 0.5) or a WAV file, played once or repeated; only boards with a microphone (S3 `waveshare-epaper397`). See "Board microphone" below |
 | `--i2s-tone PORT:HZ:AMPLITUDE` | continuous RX sine on I2S controller 0 or 1; amplitude 0..1, for example `0:1000:0.5`; repeat for multiple controllers |
 | `--script F` | host actions at emulated times (below) |
 | `--console usb\|uart0\|both\|all\|none`, `--console-prefix` | which consoles to print |
@@ -131,6 +132,7 @@ One action per line, `<seconds> <cmd> [args]`; buttons/encoder are active low.
 ```
 1.5  press btn1 150        # press for 150 ms (btn1, btn2, knob/sw, or a GPIO number)
 1.8  press pwr 2000        # a board key that is not a GPIO button (the ePaper-3.97's PWR, docs/boards.md)
+2.0  mic file voice.wav    # the board microphone: `mic tone 440 0.5`, `mic file F.wav [loop]`, `mic off`
 2.0  release 16
 2.5  gpio 17 0
 3.0  knob cw 3             # 3 detents clockwise (ccw for the other way)
@@ -361,6 +363,30 @@ by about 2.5% horizontally and 1.6% vertically; mirror/flip is not applied.
 On classic ESP32, `touchpad <gpio> <0|1>` drives a capacitive pad separately
 from the panel's `touch <x> <y> <0|1>` action. For example, `0 touchpad 4 1`
 applies a touch at time zero. `adc` and `adcwave` also support classic ADC pads.
+
+## Board microphone
+
+On a board with a microphone (so far the S3 `waveshare-epaper397`, `BoardModel::mic_ports`),
+`--mic`, the script's `mic` action and the page's Microphone row set what it hears:
+
+- a sine, `--mic tone:440:0.5` or `mic tone 440 0.5`;
+- a WAV file (integer PCM of 8 to 32 bits or 32-bit float, any channel count of which the first
+  two are kept, 8 to 96 kHz, at most 120 s), `--mic voice.wav [--mic-loop]` or
+  `mic file voice.wav [loop]`; the page decodes any format the browser can, up to 60 s;
+- the page's live microphone;
+- `mic off`: silence.
+
+`Machine::set_mic` converts the source to the rate of the first of the board's I2S receivers
+that runs (linear interpolation) and keeps its per-controller input (below) 60 ms ahead. A tone
+and a file advance with the frames the receiver takes, so a scripted run is reproducible; a file
+that is not looped ends in silence. Live input is real time: the page sends 20 ms chunks, and
+what is more than 250 ms behind is dropped. Setting a source clears what the previous one queued,
+including an `--i2s-tone` on those controllers. The run's report ends with an `[emu] mic:` line.
+
+The page's messages: `{"t":"mic","src":"tone","hz":440,"amp":0.5}` and `{"t":"mic","src":"off"}`;
+binary type 5, live, `[5][rate u32 LE][channels 1|2][PCM16 LE…]`, and type 6, a clip,
+`[6][rate u32 LE][channels][loop 0|1][PCM16 LE…]`. The emulator answers
+`{"t":"mic","state":…}` or `{"t":"mic-error","message":…}`.
 
 ## I2S microphone input
 

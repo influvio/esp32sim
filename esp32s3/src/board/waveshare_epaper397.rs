@@ -13,8 +13,13 @@
 //! pulls the AXP2101's PWRON low and, through T1 (BSS138, R24 10 kΩ to 3V3), lets `PWR_OUT` GPIO 1
 //! rise: GPIO 1 is high while PWR is held. The AXP2101's open-drain IRQ is `PWR_IRQ` GPIO 38. The
 //! I2C bus (SDA 41, SCL 42) carries the AXP2101 (Waveshare calls it TG28: its PWRON key and
-//! interrupt registers, `esp_periph::i2c::axp2101`) and a PCF85063 RTC stub; the SHTC3, QMI8658,
-//! ES8311 codec and the TF card are not modelled.
+//! interrupt registers, `esp_periph::i2c::axp2101`), an ES8311 codec stub and a PCF85063 RTC
+//! stub; the SHTC3, QMI8658 and the TF card are not modelled.
+//!
+//! Audio (schematic net list; Waveshare's `codec_board/board_cfg.txt`, board `S3_ePaper_3_97`):
+//! the ES8311 at 0x18 on I2S MCLK 13, BCLK 14, WS 47, its ADC output (the microphone) on GPIO 21
+//! and its DAC input on GPIO 48. The host microphone (`Machine::set_mic`) is fed to whichever of
+//! I2S0/I2S1 runs a receiver: a sample-level stand-in for the codec's ADC, without its gain.
 use std::sync::{Arc, Mutex};
 
 use esp_periph::i2c::axp2101::{Axp2101, Axp2101State};
@@ -119,6 +124,8 @@ impl BoardModel for WaveshareEpaper397 {
         vec![
             (0, Axp2101::ADDRESS, Box::new(Axp2101::new(self.pmic.clone()))),
             (0, 0x51, Box::new(Reg8Device::new("pcf85063a-rtc-initialization-stub", &[]))),
+            // ES8311 CHIP ID1/ID2 (0xFD/0xFE) read 0x83/0x11, as on the Touch-LCD-4B
+            (0, 0x18, Box::new(Reg8Device::new("es8311", &[(0xfd, 0x83), (0xfe, 0x11)]))),
         ]
     }
     fn display(&self) -> Option<(u32, u32, Vec<u16>, u64)> { Some((EPD_WIDTH as u32, EPD_HEIGHT as u32, self.epd.rgb565(), self.epd.version())) }
@@ -141,6 +148,7 @@ impl BoardModel for WaveshareEpaper397 {
         self.pmic_pins = (pwr, irq);
         edges
     }
+    fn mic_ports(&self) -> &'static [usize] { &[0, 1] }
     fn has_key(&self, name: &str) -> bool { matches!(name, "pwr" | "power") }
     fn key_at(&mut self, cycle: VirtualCycle, name: &str, down: bool) -> bool {
         if !self.has_key(name) { return false; }
@@ -256,7 +264,8 @@ mod tests {
         assert_eq!(b.input_levels(), vec![(3, false), (0, true), (4, true), (5, true), (6, true), (1, false), (38, true)]);
         assert_eq!((b.named_pin("boot"), b.named_pin("up"), b.named_pin("press"), b.named_pin("down"), b.named_pin("x")), (Some(0), Some(4), Some(5), Some(6), None));
         assert!(b.has_key("pwr") && !b.has_key("boot") && !b.key_at(0, "boot", true));
-        assert_eq!(b.i2c_devices().iter().map(|d| d.1).collect::<Vec<_>>(), [0x34, 0x51]);
+        assert_eq!(b.i2c_devices().iter().map(|d| d.1).collect::<Vec<_>>(), [0x34, 0x51, 0x18]);
+        assert_eq!(b.mic_ports(), [0, 1]);
         assert!(b.report().starts_with("[emu] epaper: 0 refreshes"));
         assert_eq!(crate::board::make_board("epaper397").unwrap().name(), "waveshare-epaper397");
     }

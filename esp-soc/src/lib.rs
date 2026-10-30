@@ -16,6 +16,7 @@ pub mod image;
 pub mod json;
 pub mod load;
 pub mod machine;
+pub mod mic;
 pub mod nat;
 pub mod net;
 pub mod observe;

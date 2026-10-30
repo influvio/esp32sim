@@ -271,6 +271,10 @@ impl esp_soc::SocBus for SocBus {
     fn board(&mut self) -> &mut dyn BoardModel { &mut *self.board }
     fn board_ref(&self) -> &dyn BoardModel { &*self.board }
     fn i2s_input(&mut self, port: usize) -> Option<&mut esp_periph::i2s::PcmInput> { match port { 0 => Some(self.periph.i2s0.rx_input()), 1 => Some(self.periph.i2s1.rx_input()), _ => None } }
+    fn i2s_rx_rate(&self, port: usize) -> Option<u32> {
+        let i2s = match port { 0 => &self.periph.i2s0, 1 => &self.periph.i2s1, _ => return None };
+        if i2s.rx_running() { i2s.rx_rate() } else { None }
+    }
     fn pcm_sources(&self) -> Option<&esp_periph::i2s::PcmSources> { self.periph.i2s0.pcm_bank_ref() }
     fn attach_pcm_sources(&mut self) -> Option<&mut esp_periph::i2s::PcmSources> {
         self.flush_ticks();

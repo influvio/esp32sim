@@ -210,6 +210,8 @@ pub trait SocBus: Bus {
     fn board_ref(&self) -> &dyn BoardModel;
     /// Host PCM source for an I2S controller, or None when the controller is absent.
     fn i2s_input(&mut self, _port: usize) -> Option<&mut esp_periph::i2s::PcmInput> { None }
+    /// The frame rate of a running I2S receiver; None while it is stopped or on chips without one.
+    fn i2s_rx_rate(&self, _port: usize) -> Option<u32> { None }
     /// The attached pin-routed PCM source bank, read-only, as of its last synchronization.
     /// Never attaches, flushes ticks or advances source time; None until `attach_pcm_sources`.
     fn pcm_sources(&self) -> Option<&esp_periph::i2s::PcmSources> { None }

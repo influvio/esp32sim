@@ -155,7 +155,8 @@ flash and 8 MB PSRAM for it, as the ESP32-S3-WROOM-1-N16R8 module has.
 | PWR key | the AXP2101's PWRON; `PWR_OUT` GPIO 1, high while held | script name `pwr` (`press pwr 2000`); not a GPIO button, see below |
 | AXP2101 (Waveshare: TG28) at 0x34 | I2C0 (SDA 41, SCL 42); IRQ GPIO 38, active low | `esp_periph::i2c::axp2101`: the PWRON key's interrupts, other registers storage |
 | PCF85063 at 0x51 | I2C0 | initialization-compatible register stub |
-| SHTC3, QMI8658, ES8311 + NS4150B, TF card | | not modelled |
+| ES8311 at 0x18 | I2C0; I2S MCLK 13, BCLK 14, WS 47, ADC out GPIO 21, DAC in GPIO 48 | chip-ID register stub; the microphone below |
+| SHTC3, QMI8658, NS4150B, TF card | | not modelled |
 
 Pins: Waveshare's E-Paper tutorial (section 5.2) and `DEV_Config.h` of the board's
 `02_E-Paper_Example`. The keys come from the schematic (`ESP32-S3_e-Paper-3.97-schematic.pdf`,
@@ -182,6 +183,18 @@ A key held for OFFLEVEL (REG 27H, default 6 s; Waveshare sets 4 s) and writes of
 The power-off itself is not modelled: the SoC keeps running. REG 22H bit 1 (power off after
 OFFLEVEL) and the ONLEVEL field are eFuse values; the model takes them as enabled and 128 ms.
 Power-on by the key, the regulators, the charger, the ADC and the fuel gauge are not modelled.
+
+### The microphone
+
+The ES8311's ADC output reaches the ESP32-S3 on GPIO 21 (schematic net list, `I2S_DSOUT`;
+Waveshare's `codec_board/board_cfg.txt`, board `S3_ePaper_3_97`: `bclk 14, ws 47, dout 48,
+din 21, mclk 13`). The board names I2S0 and I2S1 as its microphone ports; the host source
+(`--mic`, the script's `mic`, the page's Microphone row: docs/cli.md, "Board microphone") feeds
+whichever runs a receiver, at the PCM boundary. The codec is a register stub: its ADC gain,
+PGA, high-pass filter and the microphone's own response are not modelled, so the firmware gets
+the source's samples unchanged. Feeding the controller rather than the GPIO 21 route also covers
+duplex setups such as Waveshare's, where the RX clocks are slaved to TX and match no pin route.
+`examples/waveshare-epaper397/mic-demo` records and prints level and frequency.
 
 ### The SSD1677 model
 

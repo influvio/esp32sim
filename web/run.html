@@ -113,6 +113,7 @@
       <div class="row" id="tdbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="0">left (GPIO 0)</span><span class="boardbtn" data-pin="35">right (GPIO 35)</span><span class="st">the board's two buttons</span></div>
       <div class="row" id="stopwatchbuttons" style="display:none;margin-top:8px"><span class="boardbtn" data-pin="2">A (GPIO 2)</span><span class="boardbtn" data-pin="1">B (GPIO 1)</span></div>
       <div class="row" id="epaperbuttons" style="display:none;margin-top:8px"><span class="rocker" title="the three-way rocker on the top edge: roll it to UP or DOWN, or push it in; the mouse wheel rolls it too"><span class="boardbtn" data-pin="4" title="UP (GPIO 4)"><svg class="arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 L14 9 H10 V14 H6 V9 H2 Z"/></svg> UP</span><span class="boardbtn" data-pin="5" title="push in (GPIO 5)">●</span><span class="boardbtn" data-pin="6" title="DOWN (GPIO 6)"><svg class="arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 14 L14 7 H10 V2 H6 V7 H2 Z"/></svg> DOWN</span></span><span class="boardbtn" data-key="pwr" title="PWR: the AXP2101's PWRON key (short press, long press after 1.5 s), also GPIO 1 high while held">PWR</span><span class="boardbtn" data-pin="0" title="BOOT (GPIO 0)">BOOT</span><span class="st">rocker · side keys · ↑/← ↵ ↓/→ on the keyboard</span></div>
+      <div class="row" id="microw" style="display:none;margin-top:8px"><strong>Microphone</strong><button class="act" id="miclive" title="your microphone, live (the browser asks for permission)">🎤 microphone</button><label class="act" title="an audio file (WAV, MP3, OGG… up to 60 s), played in emulated time while the firmware records">🎵 file…<input type="file" id="micfile" accept="audio/*" style="display:none"></label><label class="st"><input type="checkbox" id="micloop"> loop</label><button class="act" id="mictone">〰 tone</button><input type="number" id="michz" value="440" min="0" max="48000" style="width:72px" title="tone frequency, Hz"><span class="st">Hz</span><input type="number" id="micamp" value="0.5" min="0" max="1" step="0.05" style="width:56px" title="tone amplitude, 0..1"><button class="act" id="micoff">■ off</button><span class="st" id="micstat">the ES8311's ADC line: off</span></div>
     </div>
     <div class="card" id="netpanel" style="display:none">
       <div class="row"><strong>Network</strong><span class="st" id="netstat">two emulated ESP32-C6 motes on one 802.15.4 medium</span></div>
@@ -335,6 +336,7 @@ function handleMessage(data) {
     if (m.t === 'board') {
       $('#stopwatchbuttons').style.display = m.name === 'stopwatch' ? '' : 'none';
       $('#epaperbuttons').style.display = m.name === 'waveshare-epaper397' ? '' : 'none';
+      $('#microw').style.display = m.name === 'waveshare-epaper397' ? '' : 'none';
       if (m.name === 'stopwatch') {
         document.querySelector('h1').textContent = 'ESP32‑S3 emulator — M5Stack StopWatch';
         $('#lcdstat').textContent = PANEL_TEXT.stopwatch;
@@ -360,12 +362,14 @@ function handleMessage(data) {
       });
     }
     else if (m.t === 'ring') { ringLeds = m.leds; drawRing(); if (m.leds.length === 1) { const [r, g, b] = m.leds[0]; paintLed($('#lcdled'), r, g, b); } }
+    else if (m.t === 'mic') { $('#micstat').textContent = 'microphone: ' + m.state; }
+    else if (m.t === 'mic-error') { micStop(); $('#micstat').textContent = 'microphone: ' + m.message; }
     else if (m.t === 'camera-error') { stopWebcam(); $('#campanel').style.display = ''; $('#camstat').textContent = m.message; }
     else if (m.t === 'stat') { $('#stat').textContent = `t = ${m.time.toFixed(2)} s · ${(m.insns/1e6).toFixed(1)} M insns · ${m.frames} frames` + (m.speed == null ? '' : m.speed < 0.95 ? ` · ⚠ ${Math.floor(m.speed * 100)}% of real time` : ' · real time') + (m.resyncs ? ` · ${m.resyncs} resync` : '') + (m.cam ? ` · ${m.cam} camera frames` : ''); $('#stat').style.color = m.speed != null && m.speed < 0.95 ? '#f66' : ''; }
 }
 function setEmulatorStatus(status) {
   $('#status').textContent = status;
-  if (/^(stopped|boot failed|disconnected|error)/i.test(status)) stopWebcam();
+  if (/^(stopped|boot failed|disconnected|error)/i.test(status)) { stopWebcam(); micStop(); }
 }
 function connect() {
   if (window.EmuLink) { link = window.EmuLink.connect(handleMessage, setEmulatorStatus); return; }
@@ -448,6 +452,49 @@ $('#camwebcam').onclick = async () => {
 };
 function stopWebcam() { camGeneration++; clearInterval(camTimer); if (camStream) camStream.getTracks().forEach(t => t.stop()); camStream = null; $('#camwebcam').style.display = ''; $('#camstop').style.display = 'none'; $('#camvideo').srcObject = null; $('#camstat').textContent = 'webcam stopped (last frame stays)'; }
 $('#camstop').onclick = stopWebcam;
+// ---- microphone (waveshare-epaper397): live samples as binary type 5 every 20 ms, a clip as
+// type 6 ([type][rate u32 le][channels][loop, type 6 only][PCM16 le…]), a tone or off as JSON
+var micCtx = null, micStream = null;   // var: setEmulatorStatus may call micStop before this line runs
+const MIC_WORKLET = `registerProcessor('mic-tap', class extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Float32Array(Math.round(sampleRate / 50)); this.n = 0; }
+  process(inputs) { const ch = inputs[0][0]; if (ch) for (let i = 0; i < ch.length; i++) { this.buf[this.n++] = ch[i]; if (this.n === this.buf.length) { this.port.postMessage(this.buf.slice()); this.n = 0; } } return true; }
+});`;
+function micStop() {
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (micCtx) micCtx.close();
+  micStream = micCtx = null; $('#miclive').textContent = '🎤 microphone';
+}
+function micPcm(type, rate, samples, loop) {
+  const head = type === 6 ? 7 : 6, buf = new Uint8Array(head + samples.length * 2), dv = new DataView(buf.buffer);
+  buf[0] = type; dv.setUint32(1, rate, true); buf[5] = 1; if (type === 6) buf[6] = loop ? 1 : 0;
+  for (let i = 0; i < samples.length; i++) dv.setInt16(head + 2 * i, Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), true);
+  return buf;
+}
+$('#miclive').onclick = async () => {
+  if (micStream) { micStop(); send({t:'mic', src:'off'}); return; }
+  if (!navigator.mediaDevices?.getUserMedia) { $('#micstat').textContent = 'The microphone requires HTTPS or localhost and a browser with microphone support.'; return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 } });
+    micCtx = new AudioContext();
+    await micCtx.audioWorklet.addModule(URL.createObjectURL(new Blob([MIC_WORKLET], { type: 'application/javascript' })));
+    const tap = new AudioWorkletNode(micCtx, 'mic-tap'), rate = micCtx.sampleRate;
+    tap.port.onmessage = e => linkSend(micPcm(5, rate, e.data));
+    micCtx.createMediaStreamSource(micStream).connect(tap); tap.connect(micCtx.destination);   // the tap outputs silence
+    $('#miclive').textContent = '■ stop microphone';
+  } catch (e) { micStop(); $('#micstat').textContent = 'microphone: ' + e.message; }
+};
+$('#micfile').onchange = async () => {
+  const file = $('#micfile').files[0]; $('#micfile').value = ''; if (!file) return;
+  micStop();
+  try {
+    const rate = 48000, audio = await new OfflineAudioContext(1, 1, rate).decodeAudioData(await file.arrayBuffer());
+    const n = Math.min(audio.length, 60 * rate), mono = new Float32Array(n);
+    for (let c = 0; c < audio.numberOfChannels; c++) { const d = audio.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / audio.numberOfChannels; }
+    linkSend(micPcm(6, rate, mono, $('#micloop').checked));
+  } catch (e) { $('#micstat').textContent = 'audio file: ' + (e.message || 'cannot decode'); }
+};
+$('#mictone').onclick = () => { micStop(); send({t:'mic', src:'tone', hz: +$('#michz').value, amp: +$('#micamp').value}); };
+$('#micoff').onclick = () => { micStop(); send({t:'mic', src:'off'}); };
 window.addEventListener('pagehide', stopWebcam);
 </script>
 </body></html>

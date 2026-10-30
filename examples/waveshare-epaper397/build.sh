@@ -2,6 +2,7 @@
 # Build the two e-paper demos for --board waveshare-epaper397 into OUT (default ./out):
 #   OUT/gxepd2/      this directory's gxepd2-demo sketch (GxEPD2 over SPI2)
 #   OUT/waveshare/   Waveshare's 02_E-Paper_Example (bit-banged SPI), fetched at a pinned commit
+#   OUT/mic/         this directory's mic-demo sketch (I2S RX from the ES8311's ADC line)
 # each with bootloader.bin, partitions.bin and app.bin.
 # Needs arduino-cli (or ARDUINO_CLI=path) with the esp32 core 3.3.x and the GxEPD2 (>= 1.6.5) and
 # Adafruit GFX libraries; the Arduino IDE 2 ships arduino-cli inside its app bundle.
@@ -24,8 +25,9 @@ build() {  # SKETCH_DIR NAME
   cp "$build_dir/$sketch.ino.bin" "$OUT/$2/app.bin"
 }
 
-mkdir -p "$OUT/gxepd2" "$OUT/waveshare"
+mkdir -p "$OUT/gxepd2" "$OUT/waveshare" "$OUT/mic"
 build "$here/gxepd2-demo" gxepd2
+build "$here/mic-demo" mic
 
 src=$OUT/waveshare/src
 if [ ! -d "$src/.git" ]; then

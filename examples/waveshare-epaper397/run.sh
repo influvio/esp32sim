@@ -1,12 +1,13 @@
 #!/bin/sh
 # Run one of the e-paper demos build.sh made on --board waveshare-epaper397.
-#   ./run.sh gxepd2|waveshare [OUT] [extra emulator flags...]
+#   ./run.sh gxepd2|waveshare|mic [OUT] [extra emulator flags...]
 #   ./run.sh gxepd2 --tft-png epd.png --max-seconds 12
 #   ./run.sh waveshare --web 8768
+#   ./run.sh mic --console usb --mic tone:440:0.5 --max-seconds 2
 # The mask ROM comes from --rom or $ESP32SIM_ROM_DIR (tools/fetch-rom-elfs.sh DIR fetches it).
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
-DEMO=${1:?usage: $0 gxepd2|waveshare [OUT] [flags...]}; shift
+DEMO=${1:?usage: $0 gxepd2|waveshare|mic [OUT] [flags...]}; shift
 OUT=$HERE/out
 if [ $# -gt 0 ] && [ -d "$1" ]; then OUT=$1; shift; fi
 FW=$OUT/$DEMO

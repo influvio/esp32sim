@@ -4,6 +4,8 @@
     ./run.sh gxepd2 --tft-png epd.png --max-seconds 12
     ./run.sh waveshare --tft-png epd.png --max-seconds 25
     ./run.sh gxepd2 --web 8768                  # http://127.0.0.1:8768/
+    ./run.sh mic --console usb --mic tone:440:0.5 --max-seconds 2
+    ./run.sh mic --web 8768                     # the page's Microphone row: live, a file or a tone
 
 `build.sh` compiles two Arduino-ESP32 sketches for the board's module (ESP32-S3-WROOM-1-N16R8:
 16 MB flash, 8 MB octal PSRAM; `FlashSize=16M,PSRAM=opi,CDCOnBoot=cdc`):
@@ -15,6 +17,10 @@
   [waveshareteam/ESP32-S3-ePaper-3.97](https://github.com/waveshareteam/ESP32-S3-ePaper-3.97) at
   commit `9b12d40`. It bit-bangs SPI on the same GPIOs. It clears, shows a picture with the fast
   init, draws shapes and text, runs four partial clock updates, clears and sleeps.
+- `mic-demo/`, from this directory: records 16 kHz stereo PCM16 over I2S (MCLK 13, BCLK 14, WS 47,
+  DIN 21) with Arduino's `ESP_I2S` and prints the level and a zero-crossing frequency estimate
+  every 100 ms. It does not set up the ES8311's ADC, which the emulator does not need (the codec
+  is a register stub); on the board, Waveshare's es8311 driver would have to do that first.
 
 Built with Arduino-ESP32 3.3.12, GxEPD2 1.6.9 and Adafruit GFX 1.13.0. Arduino IDE 2 bundles
 arduino-cli in its app (on macOS
@@ -34,5 +40,9 @@ What to expect:
   controller, which in the model restores the register defaults (Y increment), and it never
   rewrites the RED RAM the partial waveform compares against. Neither has been checked on hardware;
   see `docs/boards.md`.
+
+With `--mic tone:440:0.5` the demo prints `rms 11585 ~440 Hz` (0.5 · 32767 / √2); a WAV file
+(`--mic voice.wav`, `--mic-loop`) or a script's `mic file voice.wav` plays at the receiver's rate
+whatever its own. See `docs/boards.md`, "The microphone".
 
 `cli/tests/epaper397.rs` runs both builds (`EPAPER397_FW_DIR=out`; ignored without them).

@@ -148,6 +148,10 @@ pub trait BoardModel {
     /// Press (`down`) or release such a key at the bus cycle. What it drives reaches the GPIOs
     /// through `take_edges`. Returns false if the board has no key by that name.
     fn key_at(&mut self, _cycle: VirtualCycle, _name: &str, _down: bool) -> bool { false }
+    /// I2S controllers the board's microphone path can reach (a codec's ADC data line). The
+    /// host's microphone input (`Machine::set_mic`) feeds the first whose receiver runs; empty
+    /// for a board without one.
+    fn mic_ports(&self) -> &'static [usize] { &[] }
 }
 
 pub type Board = Box<dyn BoardModel>;

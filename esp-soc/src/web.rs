@@ -110,7 +110,14 @@ impl WebServer {
     pub fn push_incoming_bin(&self, d: Vec<u8>) {
         let mut sh = self.shared.lock().unwrap();
         if d.first() == Some(&3) { sh.incoming_bin.retain(|old| old.first() != Some(&3)); }
-        if sh.incoming_bin.len() < 4 { sh.incoming_bin.push_back(d); }
+        // live microphone chunks (type 5) arrive every few ms: keep the newest 32 besides the rest
+        let live = |m: &Vec<u8>| m.first() == Some(&5);
+        if live(&d) {
+            if sh.incoming_bin.iter().filter(|m| live(m)).count() >= 32 {
+                if let Some(i) = sh.incoming_bin.iter().position(live) { sh.incoming_bin.remove(i); }
+            }
+            sh.incoming_bin.push_back(d);
+        } else if sh.incoming_bin.iter().filter(|m| !live(m)).count() < 4 { sh.incoming_bin.push_back(d); }
     }
     pub fn set_hello(&self, frames: Vec<Vec<u8>>) { self.shared.lock().unwrap().hello = frames; }
     /// Only socket clients replay a late-join snapshot; queued consumers use the live outbox.

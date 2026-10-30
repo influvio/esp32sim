@@ -89,7 +89,9 @@ Say the new board has a BME280-style I2C sensor, a status LED on GPIO 5, and a b
    click in the page, both of which end up in `gpio_set_input` on the SoC. The exception is a key
    that does not reach a GPIO directly, such as a PMIC's power key: the board names it in
    `has_key`, takes it in `key_at` and returns what it drives from `take_edges`
-   (`WaveshareEpaper397`'s `pwr`).
+   (`WaveshareEpaper397`'s `pwr`). A board with a microphone lists the I2S controllers its codec
+   can reach in `mic_ports`; `--mic`, the script's `mic` and the page's Microphone row then feed
+   it (`WaveshareEpaper397`).
 
 3. **Register it**: one arm in `make_board` (`"sensorboard" => Some(Box::new(Sensorboard::new()))`).
    The CLI's `--board sensorboard` and the page's board list (`web/emu.js`) take the name.

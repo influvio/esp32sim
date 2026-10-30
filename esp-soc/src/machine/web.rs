@@ -125,6 +125,19 @@ impl<S: Soc> Machine<S> {
                     }
                 }
             }
+            // type 5: live microphone samples — [5][rate u32 le][channels u8][PCM16 le...]
+            // type 6: a clip for the microphone — [6][rate u32 le][channels u8][loop u8][PCM16 le...]
+            if b.len() >= 6 && (b[0] == 5 || (b[0] == 6 && b.len() >= 7)) {
+                let rate = u32::from_le_bytes([b[1], b[2], b[3], b[4]]);
+                let pcm = &b[if b[0] == 5 { 6 } else { 7 }..];
+                let changed = b[0] == 6 || !self.mic.as_ref().is_some_and(|m| m.is_live());
+                let result = crate::mic::pcm16_frames(pcm, b[5] as usize).and_then(|frames| {
+                    if b[0] == 6 { return crate::mic::Mic::clip(rate, frames, b[6] != 0).and_then(|mic| self.set_mic(Some(mic))); }
+                    if !self.mic.as_ref().is_some_and(|m| m.is_live()) { self.set_mic(Some(crate::mic::Mic::live()))?; }
+                    self.mic.as_mut().map_or(Ok(()), |m| m.push_live(rate, &frames))
+                });
+                self.mic_status(&w, result, changed);
+            }
         }
         for m in w.poll_incoming() {
             let Ok(message) = parse_json(&m) else { continue };
@@ -160,10 +173,32 @@ impl<S: Soc> Machine<S> {
                 }
                 // the page's Restart on a native run: the board's reset button
                 "reset" if self.web_restart => { self.button_reset = true; self.bus.request_reset(esp_periph::RST_POWERON); *self.bus.irq_dirty() = true; }
+                // the microphone: `src` off, or tone with `hz` and `amp`; live and clips are binary (above)
+                "mic" => {
+                    let number = |key, default| field(key).map_or(Ok(default), |v| v.parse::<f64>().map_err(|_| format!("bad {key}")));
+                    let mic = match field("src").as_deref() {
+                        Some("off") => Ok(None),
+                        Some("tone") => number("hz", 1000.0).and_then(|hz| number("amp", 0.5).and_then(|amp| crate::mic::Mic::tone(hz, amp))).map(Some),
+                        _ => Err("mic: src must be off or tone".to_string()),
+                    };
+                    let result = mic.and_then(|mic| self.set_mic(mic));
+                    self.mic_status(&w, result, true);
+                }
                 "touch" => { let x: u16 = field("x").and_then(|v| v.parse().ok()).unwrap_or(0); let y: u16 = field("y").and_then(|v| v.parse().ok()).unwrap_or(0);
                              let down = field("down").unwrap_or_default() == "1"; self.bus.touch_input(x, y, down); }
                 _ => {}
             }
+        }
+        if self.mic.is_some() { self.feed_mic(); }
+    }
+
+    /// Tell the page what the microphone does now, or why its last request failed. Live chunks
+    /// (`changed` false) answer only errors.
+    fn mic_status(&self, w: &WebServer, result: Result<(), String>, changed: bool) {
+        match result {
+            Err(e) => w.send_text(&format!("{{\"t\":\"mic-error\",\"message\":\"{}\"}}", json_escape(&e))),
+            Ok(()) if changed => w.send_text(&format!("{{\"t\":\"mic\",\"state\":\"{}\"}}", json_escape(&self.mic.as_ref().map_or("off".into(), |m| m.describe())))),
+            Ok(()) => {}
         }
     }
 

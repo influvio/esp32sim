@@ -11,12 +11,17 @@ use emu_core::{Bus, Core, CostModel, LifecycleFacts, LifecycleKind, MemoryAccess
 use std::collections::{BTreeMap, HashMap};
 
 mod modeled;
+mod mic;
 mod web;
 
 #[derive(Clone, Debug)]
 pub enum ScriptAction { Gpio(u8, bool), Serial(String), Uart(usize, String), Stop, Touch(u16, u16, bool), Poke(u32, u32), TouchPad(u8, bool), Ble(String), Analog(u8, esp_periph::AnalogSource),
     /// A board key that is not a GPIO button (`BoardModel::key_at`): name, pressed.
     Key(String, bool),
+    /// `mic tone|file|off`: replace the board microphone's source (`Machine::set_mic`).
+    Mic(Option<Box<crate::mic::Mic>>),
+    /// Top up the microphone's receiver queue and schedule the next top-up (runs without a page).
+    MicFeed,
     /// `waituart0 <timeout_s> <text>`: hold the rest of the script until UART0 prints `text` (or the
     /// timeout passes), then shift every later action by the time actually waited. Fields: text,
     /// timeout in cycles, the cycle the script placed it at.
@@ -127,6 +132,8 @@ pub struct Machine<S: Soc> {
     /// at waiti, batches that ran the whole grant, granted rounds, batches the bound refused, reserved.
     pub bb_stats: [u64; 8],
     run_steps: u64,
+    /// the board microphone's host source (`set_mic`)
+    pub mic: Option<Box<crate::mic::Mic>>,
 }
 
 /// Default scheduling quantum; `Machine::quantum` can change it (not bit-exact with the default). q256: 256 on wasm32,
@@ -160,6 +167,7 @@ impl<S: Soc> Machine<S> {
             camera_input: None, web: None, ws: WebState { last_push_cycles: 0, push_interval: 0, audio_sent: 0, ring_updates: 0, grid_updates: Vec::new(), px_pending: 0, px_sent: 0, px_deferred: false, cam_pushed: u64::MAX, cam_sent: false },
             rt: Realtime { enabled: false, wall_start: None, last_check: 0, behind: 0.0, resyncs: 0, speed: None, speed_mark: None, log: false, log_last: None, log_insns: (0, 0) },
             debug_rom: false, cost: None, model_accesses: Vec::new(), approximate_jit_timing: None, approximate_jit_frontiers: false, model_ready_at: vec![0; S::CORES], model_stop: None, model_attach_error: None,
+            mic: None,
         }
     }
 
@@ -1049,6 +1057,8 @@ impl<S: Soc> Machine<S> {
             match a {
                 ScriptAction::Gpio(pin, level) => { self.bus.gpio_set_input(pin, level); *self.bus.irq_dirty() = true; }
                 ScriptAction::Key(name, down) => { let at = self.bus.cycles(); self.bus.board().key_at(at, &name, down); }
+                ScriptAction::Mic(mic) => { if let Err(e) = self.set_mic(mic.map(|m| *m)) { eprintln!("[mic] {e}"); } }
+                ScriptAction::MicFeed => { self.feed_mic(); self.schedule_mic_feed(mic::FEED_INTERVAL_MS); }
                 ScriptAction::Serial(text) => self.bus.serial_input(text.as_bytes()),
                 ScriptAction::Uart(n, text) => self.bus.uart_input(n, text.as_bytes()),
                 ScriptAction::Stop => { self.max_cycles = 0; stopped = true; }
@@ -1192,6 +1202,11 @@ impl<S: Soc> Machine<S> {
                     ev.push((c, ScriptAction::Ble(rest.to_string())));
                 },
                 "stop" => ev.push((c, ScriptAction::Stop)),
+                "mic" => {
+                    if board.mic_ports().is_empty() { return Err(format!("line {}: this board has no microphone", ln + 1)); }
+                    let mic = crate::mic::Mic::from_words(&rest.split_whitespace().collect::<Vec<_>>()).map_err(|e| format!("line {}: mic: {e}", ln + 1))?;
+                    ev.push((c, ScriptAction::Mic(mic.map(Box::new))));
+                }
                 "waituart0" => { let mut p = rest.splitn(2, char::is_whitespace); let to: f64 = p.next().and_then(|x| x.parse().ok()).ok_or_else(|| format!("line {}: waituart0 <timeout_s> <text>", ln + 1))?;
                                  let text = p.next().unwrap_or("").trim().to_string(); if text.is_empty() { return Err(format!("line {}: waituart0 needs text", ln + 1)); }
                                  ev.push((c, ScriptAction::WaitUart0(text, (to * hz) as u64, c))); }
@@ -1200,6 +1215,7 @@ impl<S: Soc> Machine<S> {
         }
         ev.sort_by_key(|e| e.0);
         self.script.events = ev; self.script.pos = 0;
+        self.schedule_mic_feed(0);
         Ok(())
     }
 
