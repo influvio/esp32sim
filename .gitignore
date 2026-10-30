@@ -47,3 +47,4 @@ web/vendor/
 examples/hello_world-classic/.pio/
 examples/hello_world-classic/sdkconfig*
 !examples/hello_world-classic/sdkconfig.defaults
+examples/waveshare-epaper397/out/

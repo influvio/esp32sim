@@ -76,7 +76,7 @@
     <div class="row"><b>WebAssembly build</b><span class="note">everything runs in this tab — nothing is uploaded; firmware is read from your disk</span><span id="pace" class="note"></span></div>
     <div class="row" id="fw_demos" style="display:none"><span>Demos:</span></div>
     <div class="row">
-      <label>board <select id="fw_board"><option>waveshare-lcd4b</option><option>waveshare-amoled18-v2</option><option>stopwatch</option><option>atech14</option><option>waveshare-cam</option><option>none</option><option>esp32</option><option>ttgo-tdisplay</option><option>esp32c3</option><option>esp32c6</option><option>waveshare-c6-lcd147</option><option>esp32p4</option><option>esp32p4-rev3</option><option>waveshare-p4-lcd35</option></select></label>
+      <label>board <select id="fw_board"><option>waveshare-lcd4b</option><option>waveshare-amoled18-v2</option><option>waveshare-epaper397</option><option>stopwatch</option><option>atech14</option><option>waveshare-cam</option><option>none</option><option>esp32</option><option>ttgo-tdisplay</option><option>esp32c3</option><option>esp32c6</option><option>waveshare-c6-lcd147</option><option>esp32p4</option><option>esp32p4-rev3</option><option>waveshare-p4-lcd35</option></select></label>
       <label>flash MB <input id="fw_flash" type="number" value="16" min="1" max="32" style="width:52px"></label>
       <label>PSRAM MB <input id="fw_psram" type="number" value="8" min="0" max="32" style="width:52px"></label>
       <label>WiFi <input id="fw_wifi" placeholder="ssid=…,psk=… (optional)" style="width:190px"></label>
@@ -97,7 +97,7 @@
   const $ = (id) => document.getElementById(id);
   // The memory the demos use for each board (the CLI's defaults: S3 8 / 2, P4 16 / 0, the others 4 / 0); picking
   // a board sets them, the visitor can still change them.
-  const MEMORY = { 'waveshare-lcd4b': [16, 8], 'waveshare-amoled18-v2': [16, 8], 'waveshare-cam': [16, 8], atech14: [8, 2], none: [8, 2],
+  const MEMORY = { 'waveshare-lcd4b': [16, 8], 'waveshare-amoled18-v2': [16, 8], 'waveshare-epaper397': [16, 8], 'waveshare-cam': [16, 8], atech14: [8, 2], none: [8, 2],
     esp32: [4, 0], 'ttgo-tdisplay': [4, 0], esp32c3: [4, 0], esp32c6: [4, 0], 'waveshare-c6-lcd147': [4, 0], esp32p4: [16, 0], 'esp32p4-rev3': [16, 0], 'waveshare-p4-lcd35': [16, 32] };
   $('fw_board').onchange = () => { const m = MEMORY[$('fw_board').value]; if (m) { $('fw_flash').value = m[0]; $('fw_psram').value = m[1]; } };
   // The mask ROM the site hosts for the chip a board name implies (the files tools/fetch-demo-assets.sh

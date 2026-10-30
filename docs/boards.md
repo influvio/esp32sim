@@ -143,6 +143,80 @@ Waveshare does not opt into this scan. Its existing GPIO13 oscillator remains
 unchanged, including its optional measured 16,773 us period / 578 us high variant;
 STE and TE commands do not change that legacy waveform.
 
+## `waveshare-epaper397` — Waveshare ESP32-S3-ePaper-3.97
+
+Selected with `--board waveshare-epaper397` (alias `epaper397`). The native CLI defaults to 16 MB
+flash and 8 MB PSRAM for it, as the ESP32-S3-WROOM-1-N16R8 module has.
+
+| Device | Bus | Model |
+| --- | --- | --- |
+| SSD1677 + GDEM0397T81 800×480 black/white e-paper | BUSY 3, D/C 9, CS 10, SCLK 11, MOSI 12, RST 46; SPI2 through the GPIO matrix or bit-banged GPIO | `esp_soc::devices::Ssd1677` (below). Bytes reach it while CS is low (GPIO or a hardware CS on GPIO 10) and RST is high, and only if routed to GPIO 11/12 |
+| BOOT and rotary key | GPIO 0; 4 / 5 (press) / 6, active low | released-high inputs; script names `boot`, `up`/`left`, `press`/`function`/`sw`, `down`/`right` |
+| AXP2101 (Waveshare: TG28) at 0x34, PCF85063 at 0x51 | I2C0 (SDA 41, SCL 42) | initialization-compatible register stubs |
+| SHTC3, QMI8658, ES8311 + NS4150B, TF card | | not modelled |
+
+Pins: Waveshare's E-Paper tutorial (section 5.2) and `DEV_Config.h` of the board's
+`02_E-Paper_Example`. The key GPIOs come from the CrossMux firmware's hardware notes for this
+board (`docs/engineering/waveshare-epaper-397.md` in 0x1abin/crossmux). The schematic names the
+nets `Button_Up`, `Button_Function` and `Button_Down`, but its text does not give their GPIOs.
+
+### The SSD1677 model
+
+Source: the SSD1677 datasheet Rev 1.0 (Solomon Systech, Nov 2018).
+
+- **RAM.** Two 960×680 one-bit RAMs: BW (0x24, 1 = white) and RED (0x26). The window (0x44/0x45)
+  and the address counter (0x4E/0x4F) are 10-bit. X counts sources, so one byte moves the counter
+  8 X addresses and the window compares whole bytes. The data entry mode (0x11) gives the direction
+  on each axis (ID) and which axis steps first (AM). At the window's end a counter returns to its
+  start and the other axis steps.
+- **Activation (0x20).** It runs the stages enabled in 0x22. Without the DISPLAY stage (bit 2) it
+  only holds BUSY: power on (0x40) or power off (0x02). With DISPLAY, the glass gets one of:
+  - *Display Mode 2* (0x08; Waveshare's 0xFF, GxEPD2's 0xFC): pixels whose BW bit differs from RED
+    go to the BW colour; the others keep what they show. RED is not updated unless 0x37 F[6]
+    enabled RAM ping-pong.
+  - *Mode 1 with the four-grey value*: if the temperature register is 0x5A (Waveshare's
+    `Init_4GRAY`) and was not reloaded, BW and RED are two planes: 1/1 white, 0/1 light grey,
+    1/0 dark grey, 0/0 black (Waveshare's `EPD_3IN97_Display_4Gray`).
+  - *Mode 1 otherwise*: the BW RAM, as a full refresh (temperature loaded, 0xF7) or a fast one
+    (0xD7, 0x1A = 0x6A).
+- **RAM options.** 0x21 bypasses or inverts either RAM.
+- **Glass mapping.** RAM column x is glass column x. RAM row y is glass row 479 − y: the glass's
+  gates are reversed, which is why both drivers write rows with Y decrementing.
+- **BUSY timing.** BUSY is a timed board input: it rises at the command and falls at the end
+  (`next_deadline`/`advance_to`). The refreshed image reaches the glass only when BUSY falls, so
+  RAM writes alone change nothing visible. The times are the ones GxEPD2 1.6.9 measured on this
+  glass:
+
+  | Operation | BUSY high |
+  | --- | --- |
+  | Full refresh | 4,278 ms |
+  | Fast refresh | 1,837 ms |
+  | Four-grey refresh | 1,837 ms (assumed: same as fast) |
+  | Partial refresh | 408 ms |
+  | Power on | 83.873 ms |
+  | Power off | 138.81 ms |
+  | Software reset (0x12) | 1 ms (not measured; the datasheet's flow waits 10 ms) |
+- **Reset and deep sleep.** 0x12 restores the register defaults. RES# low is taken to do the same:
+  the datasheet does not spell this out, but it calls the RES# reset the only exit from deep sleep.
+  RAM is kept. Deep sleep (0x10) holds BUSY high and ignores the interface until RES#.
+- **Reports and debug output.** The report counts refreshes by kind, bytes received while busy or
+  asleep, and unknown commands. `--gram-png` shows the BW RAM unflipped.
+- **Not modelled.** The waveforms themselves, LUTs written by the firmware (0x32 is accepted and
+  its data ignored; `custom LUT` in the report), auto-write patterns (0x46/0x47), the dithering
+  engine, RAM read (0x27, MISO is not wired) and gate interlacing (0x01 SM/GD). The image is
+  always mapped as for the panel's setting `01 = [MUX 479, SM]`. The report shows the 0x01 value of
+  the last refresh, so a different setting is visible.
+
+Firmware: `examples/waveshare-epaper397/` builds GxEPD2 and Waveshare demos with Arduino-ESP32
+3.3.12. `cli/tests/epaper397.rs` pins their glass PNGs (`external_` tests, run with
+`EPAPER397_FW_DIR`).
+
+**Unconfirmed on hardware:** Waveshare's `EPD_3IN97_Display_Partial` pulses RES# before writing
+its window. Under the register-reset reading above, it then writes with the default Y increment
+and no Driver Output Control, so the clock lands mirrored at glass rows ≈156..179 instead of 300.
+Its digits also accumulate, because RED keeps the base image. If RES# kept the registers on
+silicon, the clock would land upright at rows 179..202 instead.
+
 ## `stopwatch` — M5Stack StopWatch (ESP32-S3)
 
 Selected with `--board stopwatch` (alias `m5stack-stopwatch`). The native CLI

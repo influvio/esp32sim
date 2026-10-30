@@ -38,6 +38,12 @@ esp32s3_rev0_rom.elf. They pin no-AP progress within 960,000,000 cycles, offline
 timeout at 20 nominal seconds, matching-AP connection and mismatched-AP wait.
 No firmware binary is added here; these are developer-input tests, not CI goldens.
 
+`cli/tests/epaper397.rs` boots two Arduino-ESP32 builds on `--board waveshare-epaper397`
+(GxEPD2 over SPI2, Waveshare's bit-banged demo). Its `external_` tests are ignored until
+`EPAPER397_FW_DIR` names the output of `examples/waveshare-epaper397/build.sh`. They pin the
+glass PNGs (`tests/golden/epaper397-*.png.sha256`), the controller report and GxEPD2's measured
+BUSY waits. The SSD1677 model and the board have hermetic unit tests that need no firmware.
+
 The **golden-output tests** (`cli/tests/goldens.rs`) are the
 regression bar for everything else: they run the committed demo firmware from the mask ROM and
 compare the guest console, the captured audio (SHA-256) and the instruction count against the
